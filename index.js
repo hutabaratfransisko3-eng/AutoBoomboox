@@ -12,11 +12,12 @@ const {
   PermissionFlagsBits,
   EmbedBuilder,
   ActionRowBuilder,
-  StringSelectMenuBuilder,
+  ButtonBuilder,
+  ButtonStyle,
 } = require("discord.js");
 
 const { uploadTop4Top } = require("./top4top");
-const { downloadYoutubeMp3 } = require("./downloader");
+const { downloadYoutubeMp3, downloadAudioFromUrl } = require("./downloader");
 const { searchYoutube } = require("./search");
 
 // ---------- Penyimpanan channel yang di-set, disimpan ke file JSON sederhana ----------
@@ -36,13 +37,12 @@ function saveConfig(config) {
 
 let watchedChannels = loadConfig(); // { [guildId]: channelId }
 
-// Cache sementara hasil pencarian /ytsearch per interaction, supaya bisa diambil
-// lagi saat user memilih item di select menu. Key = customId unik, value = hasil array.
+// Cache sementara hasil /ytsearch (preview sebelum konfirmasi), key = customId unik.
 // Otomatis dibersihkan setelah 5 menit untuk hemat memori.
-const searchCache = new Map();
-function cacheSearchResults(key, results) {
-  searchCache.set(key, results);
-  setTimeout(() => searchCache.delete(key), 5 * 60 * 1000);
+const previewCache = new Map();
+function cachePreview(key, data) {
+  previewCache.set(key, data);
+  setTimeout(() => previewCache.delete(key), 5 * 60 * 1000);
 }
 
 // ---------- Setup Discord Client ----------
@@ -123,6 +123,27 @@ function buildResultEmbed(title, directLink) {
     .setFooter({ text: "Auto-converted by YT2Top4Top Bot" });
 }
 
+function buildPreviewEmbed(info) {
+  const embed = new EmbedBuilder()
+    .setTitle(info.title)
+    .setColor(0x3498db)
+    .setFooter({ text: "Konfirmasi untuk generate ke link Top4Top" });
+
+  const fields = [];
+  if (info.channel) fields.push({ name: "Channel", value: info.channel, inline: true });
+  if (info.duration) fields.push({ name: "Durasi", value: info.duration, inline: true });
+  if (typeof info.views === "number") {
+    fields.push({ name: "Views", value: info.views.toLocaleString("id-ID"), inline: true });
+  }
+  if (info.uploaded) fields.push({ name: "Diunggah", value: info.uploaded, inline: true });
+
+  if (fields.length) embed.addFields(fields);
+  if (info.thumbnail) embed.setThumbnail(info.thumbnail);
+  if (info.url) embed.setURL(info.url);
+
+  return embed;
+}
+
 // ---------- Event: Ready ----------
 client.once(Events.ClientReady, async (c) => {
   console.log(`[Discord] Login sebagai ${c.user.tag}`);
@@ -157,9 +178,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const query = interaction.options.getString("query", true);
       await interaction.deferReply();
 
-      let results;
+      let info;
       try {
-        results = await searchYoutube(query);
+        info = await searchYoutube(query);
       } catch (err) {
         console.error("[Error /ytsearch]", err);
         await interaction.editReply({
@@ -168,71 +189,81 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const selectId = `ytsearch_select_${interaction.id}`;
-      cacheSearchResults(selectId, results);
+      const baseId = `ytsearch_${interaction.id}`;
+      cachePreview(baseId, info);
 
-      const menu = new StringSelectMenuBuilder()
-        .setCustomId(selectId)
-        .setPlaceholder("Pilih video yang mau digenerate ke Top4Top")
-        .addOptions(
-          results.map((item, idx) => ({
-            label: item.title.slice(0, 100),
-            description: [item.channel, item.duration].filter(Boolean).join(" • ").slice(0, 100) || undefined,
-            value: String(idx),
-          }))
-        );
+      const confirmBtn = new ButtonBuilder()
+        .setCustomId(`${baseId}_confirm`)
+        .setLabel("✅ Konfirmasi & Generate")
+        .setStyle(ButtonStyle.Success);
 
-      const row = new ActionRowBuilder().addComponents(menu);
+      const cancelBtn = new ButtonBuilder()
+        .setCustomId(`${baseId}_cancel`)
+        .setLabel("❌ Batal")
+        .setStyle(ButtonStyle.Secondary);
 
-      const listText = results
-        .map((item, idx) => `**${idx + 1}.** ${item.title}${item.duration ? ` \`(${item.duration})\`` : ""}`)
-        .join("\n");
+      const row = new ActionRowBuilder().addComponents(confirmBtn, cancelBtn);
 
       await interaction.editReply({
-        content: `🔎 Hasil pencarian untuk **${query}**:\n\n${listText}\n\nPilih salah satu di dropdown bawah ini:`,
+        embeds: [buildPreviewEmbed(info)],
         components: [row],
       });
       return;
     }
   }
 
-  // --- Select menu (hasil pilihan /ytsearch) ---
-  if (interaction.isStringSelectMenu() && interaction.customId.startsWith("ytsearch_select_")) {
-    const results = searchCache.get(interaction.customId);
+  // --- Button (konfirmasi/batal hasil /ytsearch) ---
+  if (interaction.isButton()) {
+    const isConfirm = interaction.customId.endsWith("_confirm");
+    const isCancel = interaction.customId.endsWith("_cancel");
+    if (!isConfirm && !isCancel) return;
 
-    if (!results) {
+    const baseId = interaction.customId.replace(/_(confirm|cancel)$/, "");
+    const info = previewCache.get(baseId);
+
+    if (!info) {
       await interaction.update({
         content: "⚠️ Sesi pencarian ini sudah kedaluwarsa (lebih dari 5 menit). Jalankan `/ytsearch` lagi.",
+        embeds: [],
         components: [],
       });
       return;
     }
 
-    const chosenIndex = parseInt(interaction.values[0], 10);
-    const chosen = results[chosenIndex];
-
-    if (!chosen) {
-      await interaction.update({ content: "⚠️ Pilihan tidak valid.", components: [] });
+    if (isCancel) {
+      previewCache.delete(baseId);
+      await interaction.update({
+        content: "🚫 Dibatalkan.",
+        embeds: [],
+        components: [],
+      });
       return;
     }
 
+    // isConfirm
+    previewCache.delete(baseId);
     await interaction.update({
-      content: `⏳ Memproses **${chosen.title}**... (download audio)`,
+      content: `⏳ Mengunduh audio "${info.title}"...`,
+      embeds: [],
       components: [],
     });
 
     try {
-      const { title, directLink } = await processYoutubeToTop4Top(chosen.url, async (text) => {
-        await interaction.editReply({ content: text });
+      const buffer = await downloadAudioFromUrl(info.audioUrl);
+
+      await interaction.editReply({ content: `⏳ Mengunggah ke Top4Top...` });
+
+      const safeFileName = `${info.title.replace(/[\\/:*?"<>|]/g, "").slice(0, 60)}.mp3`;
+      const directLink = await uploadTop4Top(buffer, safeFileName);
+
+      await interaction.editReply({
+        content: null,
+        embeds: [buildResultEmbed(info.title, directLink)],
       });
-
-      await interaction.editReply({ content: null, embeds: [buildResultEmbed(title, directLink)] });
     } catch (err) {
-      console.error("[Error saat memproses pilihan /ytsearch]", err);
-      await interaction.editReply({ content: `❌ Gagal memproses video ini: ${err.message}` });
+      console.error("[Error saat generate dari /ytsearch]", err);
+      await interaction.editReply({ content: `❌ Gagal memproses: ${err.message}` });
     }
-
-    searchCache.delete(interaction.customId);
     return;
   }
 });
