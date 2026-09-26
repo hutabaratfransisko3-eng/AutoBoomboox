@@ -1,0 +1,17 @@
+{
+  "name": "yt2top4top-bot",
+  "version": "1.0.0",
+  "description": "Discord bot: auto convert YouTube link to Top4Top MP3 link via Telegram Top4toP bot",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "axios": "^1.7.7",
+    "form-data": "^4.0.0",
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.4.5"
+  }
+}
