@@ -42,4 +42,17 @@ async function downloadYoutubeMp3(youtubeUrl) {
   };
 }
 
-module.exports = { downloadYoutubeMp3 };
+/**
+ * Unduh file mp3 langsung dari URL audio yang sudah didapat (misalnya dari hasil /ytsearch).
+ * @param {string} audioUrl
+ * @returns {Promise<Buffer>}
+ */
+async function downloadAudioFromUrl(audioUrl) {
+  const fileResponse = await axios.get(audioUrl, {
+    responseType: "arraybuffer",
+    timeout: 60000,
+  });
+  return Buffer.from(fileResponse.data);
+}
+
+module.exports = { downloadYoutubeMp3, downloadAudioFromUrl };
