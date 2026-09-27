@@ -20,6 +20,16 @@ const { uploadTop4Top } = require("./top4top");
 const { downloadYoutubeMp3, downloadAudioFromUrl } = require("./downloader");
 const { searchYoutube } = require("./search");
 
+// ---------- Safety net: jangan pernah biarkan bot crash total ----------
+// Kalau ada Promise gagal yang tidak ke-catch (misal token webhook expired
+// setelah proses terlalu lama), cukup log errornya, bot tetap jalan.
+process.on("unhandledRejection", (reason) => {
+  console.error("[UnhandledRejection]", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[UncaughtException]", err);
+});
+
 // ---------- Penyimpanan channel yang di-set, disimpan ke file JSON sederhana ----------
 const CONFIG_PATH = path.join(__dirname, "channels.json");
 
@@ -123,6 +133,30 @@ function buildResultEmbed(title, directLink) {
     .setFooter({ text: "Auto-converted by YT2Top4Top Bot" });
 }
 
+/**
+ * Wrapper aman untuk interaction.editReply — kalau token webhook sudah
+ * kedaluwarsa (proses terlalu lama, >15 menit) atau error lain, cukup log,
+ * jangan sampai melempar exception yang bisa mematikan proses.
+ */
+async function safeEditReply(interaction, payload) {
+  try {
+    await interaction.editReply(payload);
+  } catch (err) {
+    console.error("[safeEditReply] Gagal mengedit balasan interaction:", err.message);
+  }
+}
+
+/**
+ * Wrapper aman untuk message.edit (dipakai di alur auto-detect channel).
+ */
+async function safeMessageEdit(message, payload) {
+  try {
+    await message.edit(payload);
+  } catch (err) {
+    console.error("[safeMessageEdit] Gagal mengedit pesan:", err.message);
+  }
+}
+
 function buildPreviewEmbed(info) {
   const embed = new EmbedBuilder()
     .setTitle(info.title)
@@ -183,7 +217,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         info = await searchYoutube(query);
       } catch (err) {
         console.error("[Error /ytsearch]", err);
-        await interaction.editReply({
+        await safeEditReply(interaction, {
           content: `❌ Gagal mencari "${query}": ${err.message}`,
         });
         return;
@@ -204,7 +238,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const row = new ActionRowBuilder().addComponents(confirmBtn, cancelBtn);
 
-      await interaction.editReply({
+      await safeEditReply(interaction, {
         embeds: [buildPreviewEmbed(info)],
         components: [row],
       });
@@ -251,18 +285,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
     try {
       const buffer = await downloadAudioFromUrl(info.audioUrl);
 
-      await interaction.editReply({ content: `⏳ Mengunggah ke Top4Top...` });
+      await safeEditReply(interaction, { content: `⏳ Mengunggah ke Top4Top...` });
 
       const safeFileName = `${info.title.replace(/[\\/:*?"<>|]/g, "").slice(0, 60)}.mp3`;
       const directLink = await uploadTop4Top(buffer, safeFileName);
 
-      await interaction.editReply({
+      await safeEditReply(interaction, {
         content: null,
         embeds: [buildResultEmbed(info.title, directLink)],
       });
     } catch (err) {
       console.error("[Error saat generate dari /ytsearch]", err);
-      await interaction.editReply({ content: `❌ Gagal memproses: ${err.message}` });
+      await safeEditReply(interaction, { content: `❌ Gagal memproses: ${err.message}` });
     }
     return;
   }
@@ -287,13 +321,13 @@ client.on(Events.MessageCreate, async (message) => {
 
   try {
     const { title, directLink } = await processYoutubeToTop4Top(youtubeUrl, async (text) => {
-      await processingMsg.edit({ content: text });
+      await safeMessageEdit(processingMsg, { content: text });
     });
 
-    await processingMsg.edit({ content: null, embeds: [buildResultEmbed(title, directLink)] });
+    await safeMessageEdit(processingMsg, { content: null, embeds: [buildResultEmbed(title, directLink)] });
   } catch (err) {
     console.error("[Error saat memproses link]", err);
-    await processingMsg.edit({
+    await safeMessageEdit(processingMsg, {
       content: `❌ Gagal memproses link ini: ${err.message}`,
     });
   }
@@ -301,3 +335,4 @@ client.on(Events.MessageCreate, async (message) => {
 
 // ---------- Startup ----------
 client.login(process.env.DISCORD_TOKEN);
+  
