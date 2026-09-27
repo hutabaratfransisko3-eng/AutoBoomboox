@@ -19,10 +19,27 @@ async function downloadYoutubeMp3(youtubeUrl) {
 
   const requestUrl = `${YT_API_ENDPOINT}?${params.toString()}`;
 
-  const { data } = await axios.get(requestUrl, { timeout: 30000 });
+  let response;
+  try {
+    response = await axios.get(requestUrl, { timeout: 30000 });
+  } catch (err) {
+    // Axios melempar exception untuk status non-2xx (misal 500). Ambil pesan
+    // error asli dari body API kalau tersedia, biar informasinya jelas ke user.
+    const apiMessage = err.response?.data?.error || err.response?.data?.message;
+    throw new Error(
+      apiMessage
+        ? `API downloader error: ${apiMessage}`
+        : `API downloader gagal diakses (${err.message}).`
+    );
+  }
+
+  const data = response.data;
 
   if (!data || data.success !== true || data.statusCode !== 200) {
-    throw new Error("API downloader gagal memproses link ini.");
+    const apiMessage = data?.error || data?.message;
+    throw new Error(
+      apiMessage ? `API downloader gagal: ${apiMessage}` : "API downloader gagal memproses link ini."
+    );
   }
 
   const downloadUrl = data?.data?.audio?.download?.downloadUrl;
