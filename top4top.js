@@ -20,13 +20,23 @@ async function uploadTop4Top(buffer, filename = "file.mp3") {
     throw new RangeError("File exceeds the 200 MB limit.");
   }
 
-  // Step 1: GET homepage — ambil sid dan session cookie
+  // Step 1: GET homepage — ambil sid dan session cookie.
+  // Catatan: top4top.io menyisipkan sid di query string SEMUA link di halaman
+  // (?sid=xxxx), bukan hanya di input form. Jadi kalau input[name="sid"] tidak
+  // ada, kita fallback ambil dari salah satu href yang mengandung "?sid=".
   const initRes = await axios.get(BASE, {
     headers: { "User-Agent": UA, Accept: "text/html", Referer: "https://top4top.io/" },
   });
 
   const $ = load(initRes.data);
-  const sid = $('input[name="sid"]').attr("value") || "";
+  let sid = $('input[name="sid"]').attr("value") || "";
+
+  if (!sid) {
+    const hrefWithSid = $('a[href*="sid="]').first().attr("href") || "";
+    const match = hrefWithSid.match(/[?&]sid=([^&"'\s]+)/);
+    if (match) sid = match[1];
+  }
+
   const rawCookies = initRes.headers["set-cookie"] || [];
   const cookie = rawCookies.map((c) => c.split(";")[0]).join("; ");
 
@@ -43,7 +53,7 @@ async function uploadTop4Top(buffer, filename = "file.mp3") {
       Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
       Origin: "https://top4top.io",
-      Referer: BASE,
+      Referer: `${BASE}?sid=${sid}`,
       Cookie: cookie,
       Connection: "keep-alive",
     },
@@ -52,10 +62,25 @@ async function uploadTop4Top(buffer, filename = "file.mp3") {
   });
 
   const $res = load(data);
-  // Ambil input pertama dari all_boxes (رابط الملف = direct link)
-  const link = $res("input.all_boxes").first().attr("value")?.trim();
 
-  if (!/^https?:\/\/(?:\w+\.)?top4top\.io\/.+$/i.test(link || "")) {
+  // Coba beberapa kemungkinan selector, karena struktur halaman hasil upload
+  // top4top.io bisa berbeda-beda (all_boxes / txtbox / class lain).
+  let link =
+    $res("input.all_boxes").first().attr("value")?.trim() ||
+    $res('input[readonly]').first().attr("value")?.trim() ||
+    null;
+
+  // Fallback terakhir: cari pola URL top4top.io langsung di raw HTML
+  if (!link || !/^https?:\/\/(?:\w+\.)?top4top\.io\/.+$/i.test(link)) {
+    const urlMatch = data.match(/https?:\/\/[a-z0-9]+\.top4top\.io\/[^\s"'<>]+/i);
+    if (urlMatch) link = urlMatch[0];
+  }
+
+  if (!link || !/^https?:\/\/(?:\w+\.)?top4top\.io\/.+$/i.test(link)) {
+    console.error(
+      "[top4top] Gagal menemukan link hasil upload. Potongan HTML respons (2000 char pertama):\n",
+      data.slice(0, 2000)
+    );
     throw new Error("Upload failed. Download link not found.");
   }
 
